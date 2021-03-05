@@ -66,6 +66,13 @@ module comm_fg_component_mod
      logical(lgt), pointer, dimension(:)           :: sample_S_tab   
      logical(lgt), allocatable, dimension(:)       :: optimize_prior
      type(ind_region), allocatable, dimension(:)   :: indregs
+     integer(i4b)                                  :: nharm !number of CO harmonics
+     integer(i4b)                                  :: vmap_group !CO velocity map group
+     logical(lgt)                                  :: sample_vmap !sample flag velocity maps
+     real(dp)                                      :: vmap_rms !RMS for velocity map
+     real(dp), allocatable, dimension(:,:)         :: vmap !velocity map
+     real(dp), allocatable, dimension(:,:)         :: vmap_prior !velocity map prior mean
+     
   end type fg_meta_data
 
   integer(i4b)                     :: num_fg_comp, num_fg_par
@@ -586,6 +593,127 @@ contains
              call get_parameter(paramfile, paramname, par_dp=fg_components(i)%gauss_prior(j,2))
           end do
 
+       ! New CO component with CO cloud velocity and Bandpass tilt parameter   
+       else if (trim(fg_components(i)%type) == 'CO_velocity') then
+
+          paramname = 'APPLY_JEFFREYS_PRIOR' // i_text
+          call get_parameter(paramfile, paramname, par_lgt=fg_components(i)%apply_jeffreys_prior)       
+
+          paramname = 'INITIALIZATION_MODE' // i_text
+          call get_parameter(paramfile, paramname, par_string=fg_components(i)%init_mode)
+
+
+          ! vmap_group is the group number of the CO velocity map
+          ! several CO components may share the same map (e.g. all 12CO components)
+          paramname = 'CO_VELOCITY_GROUP' // i_text
+          ! vmap_group is ranging from 1 to num_fg_comp (i.e. number of components)
+          !vmap_group == 0, is equivalent to no vmap. This should set all tilt parameters,
+          ! the tilt RMS, and the velocity map to zero (i.e. it becomes the old CO comp)
+          call get_parameter(paramfile, paramname, par_int=fg_components(i)%vmap_group)
+
+          !allocate velocity map, read in and get sampling flag and sampling RMS
+          allocate(fg_components(i)%vmap(0:npix-1,1))
+          if (fg_components(i)%vmap_group > 0) then
+             call int2string(fg_components(i)%vmap_group, j_text)
+
+             paramname = 'CO_VELOCITY_GROUP_MAP' // j_text   ! group specific
+             call get_parameter(paramfile, paramname, par_string=filename)
+             call read_map(filename,fg_components(i)%vmap)
+             paramname = 'SAMPLE_CO_VELOCITY_MAP' // i_text
+             call get_parameter(paramfile, paramname, par_lgt=fg_components(i)%sample_vmap)
+             if (fg_components(i)%sample_vmap==.true.) then
+                allocate(fg_components(i)%vmap_prior(0:npix-1,1))
+                call int2string(fg_components(i)%vmap_group, j_text)
+                paramname = 'CO_VELOCITY_MAP_GROUP_GAUSSIAN_STDDEV' // j_text ! group specific
+                call get_parameter(paramfile, paramname, par_dp=fg_components(i)%vmap_rms)
+                fg_components(i)%vmap_prior=fg_components(i)%vmap
+             end if
+          else
+             fg_components(i)%vmap = 0.d0
+             fg_components(i)%sample_vmap = .false.
+             fg_components(i)%vmap_rms = 0.d0
+          end if
+          
+          ! Input map in km/s, convert to relative frequency shift (wrt. nu_ref
+          fg_components(i)%vmap=(sqrt((1-fg_components(i)%vmap/(c/1000.d0))/ & 
+               & (1+fg_components(i)%vmap/(c/1000.d0)))-1.d0)
+
+          
+          !get number of harmonics and allocate 2*Nharm+1 parameters
+          !Nharm line ratios and Nharm+1 tilt parameters
+          paramname = 'NUM_CO_HARMONICS' // i_text
+          call get_parameter(paramfile, paramname, par_int=fg_components(i)%nharm)
+          fg_components(i)%npar=2*fg_components(i)%nharm + 1
+          !Nharm + 1 bands (Nharm + reference)
+          allocate(fg_components(i)%co_band(fg_components(i)%nharm+1))
+          fg_components(i)%co_band(1) = fg_components(i)%ref_band
+          !add number of parameters to total
+          num_fg_par                   = num_fg_par + fg_components(i)%npar
+          !allocate priors for the parameters
+          allocate(fg_components(i)%priors(fg_components(i)%npar,3))
+          allocate(fg_components(i)%gauss_prior(fg_components(i)%npar,2))
+          !get standard CO_multiline parameters
+          do j = 1, fg_components(i)%nharm
+             call int2string(j, j_text)
+             paramname = 'LINE_LABEL' // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_string=fg_components(i)%indlabel(j))       
+             paramname = 'BAND' // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_int=fg_components(i)%co_band(j+1))
+             paramname = 'DEFAULT_CO_LINE_RATIO_' // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%priors(j,3))
+             paramname = 'CO_PRIOR_UNIFORM_LOW'  // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%priors(j,1))
+             paramname = 'CO_PRIOR_UNIFORM_HIGH'  // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%priors(j,2))
+             if (fg_components(i)%priors(j,1) > fg_components(i)%priors(j,2)) then
+                write(*,*) 'Error: Lower prior is larger than upper prior for parameter no. ', i
+                call mpi_finalize(ierr)
+                stop
+             end if
+             paramname = 'CO_PRIOR_GAUSSIAN_MEAN'  // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%gauss_prior(j,1))
+             paramname = 'CO_PRIOR_GAUSSIAN_STDDEV'  // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%gauss_prior(j,2))
+          end do
+          
+          ! get velocity specific parameters
+          !reference tilt label
+          fg_components(i)%indlabel(fg_components(i)%nharm + 1) = 'tilt_ref_' // fg_components(i)%label
+          
+          do j = 0, fg_components(i)%nharm
+             call int2string(j, j_text)
+             !tilt parameter label
+             if (j > 0) fg_components(i)%indlabel(fg_components(i)%nharm + 1 + j) = 'tilt_' // fg_components(i)%indlabel(j)
+             !default tilt value
+             paramname = 'DEFAULT_CO_BP_TILT' // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%priors(fg_components(i)%nharm+1+j,3))
+             !absolute lower tilt limit
+             paramname = 'CO_BP_TILT_PRIOR_UNIFORM_LOW'  // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%priors(fg_components(i)%nharm+1+j,1))
+             !absolute higher tilt limit
+             paramname = 'CO_BP_TILT_PRIOR_UNIFORM_HIGH'  // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%priors(fg_components(i)%nharm+1+j,2))
+             !check if lower limit > higher limit
+             if (fg_components(i)%priors(fg_components(i)%nharm+1+j,1) > fg_components(i)%priors(fg_components(i)%nharm+1+j,2)) then
+                write(*,*) 'Error: Lower bp tilt prior is larger than upper prior for component no. ', i
+                call mpi_finalize(ierr)
+                stop
+             end if
+             !tilt prior mean
+             paramname = 'CO_BP_TILT_PRIOR_GAUSSIAN_MEAN'  // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%gauss_prior(fg_components(i)%nharm+1+j,1))
+             !tilt prior RMS
+             paramname = 'CO_BP_TILT_PRIOR_GAUSSIAN_STDDEV'  // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_dp=fg_components(i)%gauss_prior(fg_components(i)%nharm+1+j,2))
+          end do
+
+          !if no velocity map
+          if (fg_components(i)%vmap_group == 0) then
+             !set tilt prior mean and RMS to zero
+             fg_components(i)%gauss_prior(fg_components(i)%nharm+1:,:) = 0.d0
+             !set tilt defaults to zero
+             fg_components(i)%priors(fg_components(i)%nharm+1:,3)) = 0.d0
+          end if
        else if (trim(fg_components(i)%type) == 'AME_freq_shift') then
 
           paramname = 'APPLY_JEFFREYS_PRIOR' // i_text
@@ -861,8 +989,12 @@ contains
 
        allocate(fg_components(i)%fwhm_p(fg_components(i)%npar))
        do j = 1, fg_components(i)%npar
-          call int2string(j, j_text)
-          call get_parameter(paramfile, 'FWHM_PAR'//i_text//'_'//j_text, par_dp=fg_components(i)%fwhm_p(j))
+          if (trim(fg_components(i)%type) == 'CO_multiline' .or. trim(fg_components(i)%type) == 'CO_velocity') then
+             fg_components(i)%fwhm_p(j) = 0.d0
+          else
+             call int2string(j, j_text)
+             call get_parameter(paramfile, 'FWHM_PAR'//i_text//'_'//j_text, par_dp=fg_components(i)%fwhm_p(j))
+          end if
        end do
 
        allocate(fg_components(i)%optimize_prior(fg_components(i)%npar))
@@ -880,7 +1012,7 @@ contains
        allocate(fg_components(i)%p_rms_gauss(fg_components(i)%npar,2))
        allocate(fg_components(i)%p_rms_uni(fg_components(i)%npar,2))
        do j = 1, fg_components(i)%npar
-          if (.not. apply_par_rms_smooth .or. trim(fg_components(i)%type) == 'CO_multiline') then
+          if (.not. apply_par_rms_smooth .or. trim(fg_components(i)%type) == 'CO_multiline' .or. trim(fg_components(i)%type) == 'CO_velocity') then
              fg_components(i)%p_rms       = 0.d0
              fg_components(i)%p_rms_gauss = 0.d0
              fg_components(i)%p_rms_uni   = 0.d0
@@ -895,7 +1027,7 @@ contains
        end do
 
        do j = 1, fg_components(i)%npar
-          if (trim(fg_components(i)%type) == 'CO_multiline') cycle
+          if (trim(fg_components(i)%type) == 'CO_multiline' .or. trim(fg_components(i)%type) == 'CO_velocity') cycle
           ! Give some extra space to ensure stable splines
           delta = fg_components(i)%priors(j,2)-fg_components(i)%priors(j,1)
           if (.not. trim(fg_components(i)%type) == 'physical_dust') then
@@ -914,13 +1046,20 @@ contains
 
        ! Set up index regions
        allocate(fg_components(i)%indregs(fg_components(i)%npar))
-       do j = 1, fg_components(i)%npar
-          call int2string(j, j_text)
-          paramname = 'REGION_DEFINITION' // i_text // '_' // j_text
-          call get_parameter(paramfile, paramname, par_string=filename)
-          call initialize_index_regions(chaindir, i, j, filename, mask, fg_components(i)%mask, nside, nmaps, &
-               & fg_components(i)%fwhm_p(j), fg_components(i)%indregs(j), fg_components(i)%priors(j,1:2))
-       end do
+       if (trim(fg_components(i)%type) == 'CO_multiline' .or. trim(fg_components(i)%type) == 'CO_velocity') then
+          do j = 1, fg_components(i)%npar
+             call initialize_index_regions(chaindir, i, j, 'fullsky', mask, fg_components(i)%mask, nside, nmaps, &
+                  & fg_components(i)%fwhm_p(j), fg_components(i)%indregs(j), fg_components(i)%priors(j,1:2))
+          end do
+       else
+          do j = 1, fg_components(i)%npar
+             call int2string(j, j_text)
+             paramname = 'REGION_DEFINITION' // i_text // '_' // j_text
+             call get_parameter(paramfile, paramname, par_string=filename)
+             call initialize_index_regions(chaindir, i, j, filename, mask, fg_components(i)%mask, nside, nmaps, &
+                  & fg_components(i)%fwhm_p(j), fg_components(i)%indregs(j), fg_components(i)%priors(j,1:2))
+          end do
+       end if
           
     end do
 
@@ -971,7 +1110,7 @@ contains
        end if
     end if
 
-    if (.not. trim(fg_comp%type) == 'CO_multiline') then
+    if (.not. (trim(fg_comp%type) == 'CO_multiline' .or. trim(fg_comp%type) == 'CO_velocity')) then
        do i = 1, fg_comp%npar
           p_low  = fg_comp%priors(i,1)
           p_high = fg_comp%priors(i,2)
@@ -993,6 +1132,11 @@ contains
 
        get_effective_fg_spectrum = compute_CO_multiline_spectrum(band, &
             & fg_comp%co_band(1:fg_comp%npar+1), fg_comp%nu_ref, fg_params) * ant2data(band)
+
+    else if (trim(fg_comp%type) == 'CO_velocity') then
+
+       get_effective_fg_spectrum = compute_CO_velocity_spectrum(band, &
+            & fg_comp%co_band(1:fg_comp%nharm+1), fg_comp%nu_ref, fg_params, fg_comp%vmap(pixel,1)) * ant2data(band)
 
     else if (fg_comp%npar == 0) then
           
@@ -1050,6 +1194,15 @@ contains
        else
           get_effective_deriv_fg_spectrum = compute_CO_multiline_spectrum(band, &
                & fg_comp%co_band(1:fg_comp%npar+1), fg_comp%nu_ref, fg_params, deriv=.true.) 
+       end if
+
+    elseif (trim(fg_comp%type) == 'CO_velocity') then
+
+       if (band == fg_comp%co_band(1)) then
+          get_effective_deriv_fg_spectrum = 0.d0          
+       else
+          get_effective_deriv_fg_spectrum = compute_CO_velocity_spectrum(band, &
+               & fg_comp%co_band(1:fg_comp%nharm+1), fg_comp%nu_ref, fg_params, fg_comp%vmap(pixel,1), deriv=.true.) 
        end if
 
     else if (fg_comp%npar == 0) then
@@ -1175,8 +1328,18 @@ contains
           if (trim(fg_components(k)%init_mode) == 'input_map') then
              allocate(map(0:npix-1,nmaps))
              call int2string(k,i_text)
-             call int2string(m,j_text)
-             call get_parameter(paramfile, 'INIT_INDEX_MAP' // i_text // '_' // j_text, par_string=filename)
+             if (trim(fg_components(k)%type) == 'CO_velocity') then
+                if (m > (fg_components(k)%npar-1)/2) then
+                   call int2string(m-(fg_components(k)%npar-1)/2-1,j_text)
+                   call get_parameter(paramfile, 'INIT_BP_TILT_INDEX_MAP' // i_text // '_' // j_text, par_string=filename)
+                else
+                    call int2string(m,j_text)
+                call get_parameter(paramfile, 'INIT_INDEX_MAP' // i_text // '_' // j_text, par_string=filename)
+                end if
+             else
+                call int2string(m,j_text)
+                call get_parameter(paramfile, 'INIT_INDEX_MAP' // i_text // '_' // j_text, par_string=filename)
+             end if
              call read_map(filename, map)
              if (trim(fg_components(k)%type) == 'freefree_EM' .and. m ==1) then
                 map = log(map)
@@ -1318,6 +1481,10 @@ contains
     real(dp)                                     :: get_ideal_fg_spectrum
 
     if (trim(fg_comp%type) == 'CO_multiline') then
+       !get_ideal_spectrum = compute_CO_multiline_spectrum(band, &
+       !     & fg_comp%co_band(1:fg_comp%npar+1), fg_comp%nu_ref, fg_params)
+       get_ideal_fg_spectrum = 0.d0
+    else if (trim(fg_comp%type) == 'CO_velocity') then
        !get_ideal_spectrum = compute_CO_multiline_spectrum(band, &
        !     & fg_comp%co_band(1:fg_comp%npar+1), fg_comp%nu_ref, fg_params)
        get_ideal_fg_spectrum = 0.d0
@@ -1502,6 +1669,41 @@ contains
     end if
 
   end function compute_CO_multiline_spectrum
+
+  ! tilt (i.e. par(i+n+1) ) is defined as bandpass shift per GHz. 
+  ! Note that nu_shift is given in Hz
+  function compute_CO_velocity_spectrum(band, co_band, nu_ref, par, rel_nu_shift, deriv)
+    implicit none
+
+    integer(i4b),               intent(in)  :: band
+    integer(i4b), dimension(:), intent(in)  :: co_band
+    real(dp),                   intent(in)  :: nu_ref, rel_nu_shift
+    real(dp),     dimension(:), intent(in)  :: par
+    real(dp)                                :: compute_CO_velocity_spectrum
+    logical(lgt),               intent(in), optional :: deriv
+
+    integer(i4b) :: i, n
+
+    n=(size(par)-1)/2 !n=fg_comp%nharm
+    compute_CO_velocity_spectrum = 0.d0
+    if (band == co_band(1)) then
+       compute_CO_velocity_spectrum = 1.d0 + par(n+1)*rel_nu_shift*nu_ref/1.d9
+    else
+       do i = 1, n
+          if (band == co_band(i+1)) then
+             compute_CO_velocity_spectrum = (par(i)+par(i+n+1)*rel_nu_shift*nu_ref/1.d9) * &
+                  & (bp(band)%co2t/bp(band)%a2t) / (bp(co_band(1))%co2t/bp(co_band(1))%a2t)
+             if (present(deriv)) then
+                write(*,*) 'should never be here'
+                stop
+                compute_CO_velocity_spectrum = &
+                     & (bp(band)%co2t/bp(band)%a2t) / (bp(co_band(1))%co2t/bp(co_band(1))%a2t)
+             end if
+          end if
+       end do
+    end if
+
+  end function compute_CO_velocity_spectrum
 
   function compute_AME_freq_shift_spectrum(nu, nu_ref, nu_p, nu_p0, S, rms)
     implicit none
@@ -1885,7 +2087,7 @@ contains
 
        if (c > 0 .and. c /= i) cycle
 
-       if (trim(fg_components(i)%type) == 'CO_multiline') then
+       if (trim(fg_components(i)%type) == 'CO_multiline' .or. trim(fg_components(i)%type) == 'CO_velocity') then
 
           ! Do nothing
 

@@ -37,6 +37,7 @@ module comm_fg_mod
   real(dp),                                     private :: N_scale
   integer(i4b),    allocatable, dimension(:),   private :: s_reg
   real(dp),        allocatable, dimension(:),   private :: amp_reg, w_reg, scale_reg
+  real(dp),        allocatable, dimension(:),   private :: vmap_reg
   real(dp),        allocatable, dimension(:,:), private :: d_reg, invN_reg
   real(dp),        allocatable, dimension(:),   private :: x_def
   type(fg_params), allocatable, dimension(:),   private :: fg_par_reg
@@ -351,6 +352,7 @@ contains
     ! Prepare reduced data set
     npix_reg = region%n_ext
     allocate(d_reg(npix_reg,numband), amp_reg(npix_reg), invN_reg(npix_reg,numband))
+    allocate(vmap_reg(npix_reg))
     allocate(s_reg(npix_reg), fg_par_reg(npix_reg), w_reg(npix_reg))
     allocate(pix_reg(npix_reg,2), inc_band(numband))
     par_old = par_map(region%pix(1,1),region%pix(1,2),p)
@@ -358,6 +360,13 @@ contains
     if (trim(fg_components(comp)%type) == 'CO_multiline') then
        inc_band                                         = .false.
        inc_band(fg_components(comp)%co_band(p_local+1)) = .true.
+    elseif (trim(fg_components(comp)%type) == 'CO_velocity') then
+       inc_band                                         = .false.
+       if (p_local > fg_components(comp)%nharm) then
+          inc_band(fg_components(comp)%co_band(p_local-fg_components(comp)%nharm)) = .true.
+       else
+          inc_band(fg_components(comp)%co_band(p_local+1)) = .true.
+       end if
     end if
     call cpu_time(t1)
     pix_reg     = region%pix_ext
@@ -368,6 +377,9 @@ contains
        call reorder_fg_params(par_smooth(pix,:,:), fg_par_reg(i))
        d_reg(i,:)  = data(pix,s,:)
        amp_reg(i)  = amp(pix,s,comp)
+       if (trim(fg_components(comp)%type) == 'CO_velocity') then
+          vmap_reg(i) = fg_components(comp)%vmap(pix,1)
+       end if
        s_reg(i)    = s
        w_reg(i)    = region%w(i)
        comp_reg    = comp
@@ -415,6 +427,29 @@ contains
 
        ! Draw amplitude with Gaussian sampler
        par = sample_CO_line(comp, fg_components(comp)%co_band(p_local+1))
+       do i = 1, region%n
+          par_map(region%pix(i,1),region%pix(i,2),p_reg) = par
+       end do
+       if (present(chisq_out)) chisq_out = -2.d0*lnL_specind_ARS(par)
+
+    elseif (trim(fg_components(comp)%type) == 'CO_velocity') then 
+
+       !! NOT FINISHED !!
+
+       ! Draw amplitude with Gaussian sampler
+       if (p_local == fg_components(comp)%nharm+1) then
+          par = sample_CO_tilt_velocity(comp, fg_components(comp)%co_band(p_local- &
+               & fg_components(comp)%nharm),par_map(1,1,p),p_local, &
+               & fg_components(comp)%nu_ref)
+       else if (p_local > fg_components(comp)%nharm + 1) then
+          par = sample_CO_tilt_velocity(comp, fg_components(comp)%co_band(p_local- &
+               & fg_components(comp)%nharm),par_map(1,1,p-(fg_components(comp)%nharm+1)), &
+               & p_local, fg_components(comp)%nu_ref)
+       else
+          par = sample_CO_lr_velocity(comp, fg_components(comp)%co_band(p_local+1), &
+               & par_map(1,1,p+(fg_components(comp)%nharm+1)),p_local, &
+               & fg_components(comp)%nu_ref)
+       end if
        do i = 1, region%n
           par_map(region%pix(i,1),region%pix(i,2),p_reg) = par
        end do
@@ -655,6 +690,309 @@ contains
 
   end subroutine sample_spec_index_single_region
 
+  subroutine sample_CO_velocity_map(s0, residuals_in, inv_N_in, fg_amp_in, fg_param_map, co_group, stat)
+    implicit none
+    
+    type(genvec),                     intent(in),    optional :: s0
+    real(dp), dimension(0:,1:,1:),    intent(in),    optional :: residuals_in, fg_amp_in
+    real(dp), dimension(0:,1:,1:),    intent(in),    optional :: inv_N_in
+    real(dp), dimension(0:,1:,1:),    intent(inout), optional :: fg_param_map
+    integer(i4b),                     intent(inout), optional :: stat
+    integer(i4b),                     intent(in),    optional :: co_group
+
+    integer(i4b) :: i, j, k, l, m, n, p, q, r, s, fac, mystat, pix, c, test
+    integer(i4b) :: num_CO_comp, num_CO_tilt, ref_band, band, id, vmap_group
+    integer(i4b) :: CO_tilt_bands(num_fg_par), CO_comps(num_fg_comp),tilt_id(num_fg_par)
+    logical(lgt) :: accept, include_CO_band(numband), band_counted(numband)
+    logical(lgt) :: update_vmap_comp(num_fg_comp)
+    real(dp)     :: chisq_prop, chisq0, chisq0_rms, chisq_prop_rms, accept_prob
+    real(dp)     :: vmap_gauss(2), vmap_uni(2), chisq_in, chisq_out, speed_of_light
+    real(dp)     :: A, b, mu, sigma, par, scale, sigma_p, tilt, nu_ref
+    real(dp), allocatable, dimension(:,:,:)   :: par_prop, par0, par_smooth
+    real(dp), allocatable, dimension(:,:,:)   :: residuals, fg_amp
+    real(dp), allocatable, dimension(:,:,:)   :: inv_N
+    real(dp), allocatable, dimension(:,:)     :: chisq_map, vmap0, vmap_p
+    real(dp), allocatable, dimension(:,:)     :: vmap_temp, res_temp
+    real(dp), allocatable, dimension(:), save :: N_accept, N_total
+
+    vmap_uni(1)  = 3000.d0 !not physical with velocities larger than 3000 km/s)
+    vmap_uni(2) = -3000.d0 ! AND! we sample frequency shift --> neg vel => positive shift
+      
+    speed_of_light = 2.99792458d8 !m/s
+    
+    mystat = 0
+    if (myid_chain == root) vmap_group = co_group
+    call mpi_bcast(vmap_group, 1, MPI_INTEGER, root, comm_chain, ierr)
+
+    !Start by finding how many CO_velocity components and tilt parameters we've got
+    if (myid_chain == root .and. verbosity > 2) then
+       write(*,*) '   Hardcoded limits: velocity min [km/s] =',vmap_uni(2)
+       write(*,*) '                     velocity max [km/s] =',vmap_uni(1)
+    end if
+    ! need to get velocity in terms of frequency shift
+    vmap_uni = sqrt( (1.d0-vmap_uni/(speed_of_light/1.d3))/ &
+         & (1.d0+vmap_uni/(speed_of_light/1.d3)) ) - 1.d0
+    if (myid_chain == root .and. verbosity > 2) then
+       write(*,*) '                relative freq. shift min =',vmap_uni(1)
+       write(*,*) '                relative freq. shift max =',vmap_uni(2)
+    end if
+
+    num_CO_comp = 0
+    num_CO_tilt = 0
+    include_CO_band = .false.
+    l=0
+
+    update_vmap_comp = .false.
+    do i = 1, num_fg_comp
+       if (trim(fg_components(i)%type) == 'CO_velocity') then
+          if (fg_components(i)%vmap_group == vmap_group) then !get the components to update
+             update_vmap_comp(i)=.true.             
+             if (fg_components(i)%sample_vmap == .true.) then !get the components to sample
+                if (myid_chain == root .and. verbosity > 1) then
+                   write(*,*) '       using CO component: ', fg_components(i)%label
+                end if
+                num_CO_comp = num_CO_comp + 1
+                CO_comps(num_CO_comp) = i
+                do k = 1,fg_components(i)%nharm + 1
+                   num_CO_tilt = num_CO_tilt + 1
+                   tilt_id(num_CO_tilt)=l+fg_components(i)%nharm+k !get index in fg_param_map
+                   CO_tilt_bands(num_CO_tilt)=fg_components(i)%co_band(k)
+                   include_CO_band(fg_components(i)%co_band(k)) = .true.
+                end do
+             end if
+          end if
+       end if
+       l = l + fg_components(i)%npar
+    end do
+
+    ! If there are no CO_velocity components to sample from or the rms is equal to 0 
+    ! then there are no need to sample
+    if (num_CO_comp == 0) return
+    ! check the first rms, they share same rms from initialization
+    if (fg_components(CO_comps(1))%vmap_rms == 0.d0) return 
+    vmap_gauss(2) = fg_components(CO_comps(1))%vmap_rms
+    if (myid_chain == root .and. verbosity > 2) write(*,*) '          Preparing maps'
+   
+    ! read-in of important parameter maps
+    allocate(vmap0(0:npix-1,1), vmap_p(0:npix-1,1),vmap_temp(0:npix-1,1))
+
+    allocate(par_prop(0:npix-1,nmaps,num_fg_par), par0(0:npix-1,nmaps,num_fg_par))
+    allocate(par_smooth(0:npix-1,nmaps,num_fg_par))
+    if (myid_chain == root) par0 = fg_param_map
+    call mpi_bcast(par0, size(par0), MPI_DOUBLE_PRECISION, root, comm_chain, ierr)
+    call get_smooth_par_map(par0, par_smooth)
+
+
+    ! Distribute information
+    allocate(residuals(0:npix-1,nmaps,numband), res_temp(0:npix-1,numband))
+    allocate(inv_N(0:npix-1,nmaps,numband))
+    allocate(fg_amp(0:npix-1,nmaps,num_fg_comp))
+    
+    if (myid_chain == root) then
+       residuals = residuals_in
+       inv_N     = inv_N_in
+       fg_amp    = fg_amp_in
+       vmap0     = fg_components(CO_comps(1))%vmap
+       vmap_p    = fg_components(CO_comps(1))%vmap_prior
+    end if
+    
+    call mpi_bcast(residuals, size(residuals), MPI_DOUBLE_PRECISION, root, comm_chain, ierr)
+    call mpi_bcast(inv_N,     size(inv_N),     MPI_DOUBLE_PRECISION, root, comm_chain, ierr)
+    call mpi_bcast(fg_amp,    size(fg_amp),    MPI_DOUBLE_PRECISION, root, comm_chain, ierr)
+    call mpi_bcast(vmap0,     size(vmap0),     MPI_DOUBLE_PRECISION, root, comm_chain, ierr)
+    call mpi_bcast(vmap_p,    size(vmap_p),    MPI_DOUBLE_PRECISION, root, comm_chain, ierr)
+
+    vmap_temp = vmap0
+
+    ! Now we want to set up the residuals of each CO tilt parameter. 
+    ! The easiest way of doing this is to compute the full residual map of each band,
+    ! and then add the contribution of the given tilt to the relevant resudual.
+    ! We only care about creating residuals of bands that are a part of CO_velocity comps.
+
+    ! s = polarization = 1 as CO is only itensity, not polarization
+    s=1
+    allocate(fg_par_reg(0:npix-1))
+    if (myid_chain == root .and. verbosity > 2) write(*,*) '          Creating residuals'
+    do pix = 0,npix-1
+       call reorder_fg_params(par_smooth(pix,:,:), fg_par_reg(pix))
+       do k = 1,numband
+          if (include_CO_band(k)) then
+             do j = 1,num_fg_comp
+                residuals(pix,s,k) = residuals(pix,s,k) - &
+                     & get_effective_fg_spectrum(fg_components(j), k, &
+                     & fg_par_reg(pix)%comp(j)%p(s,:), pixel=pix, pol=s) * fg_amp(pix,s,j) 
+             end do
+          end if
+       end do
+    end do
+
+
+    ! Now we have reduced all residuals (i.e. data in spectral index sampling) to
+    ! the real residual maps. Now we start sampling the vmap.
+
+    ! calculate chisq in
+    allocate(chisq_map(0:npix-1,numband))
+    chisq_map = 0.d0
+    band_counted=.false.
+
+    do j = 1, num_CO_comp
+       id=CO_comps(j)
+       do i = 1,fg_components(id)%nharm+1
+          band=fg_components(id)%co_band(i)
+          if (band_counted(band) == .false.) then !reduce identical chisq calculations
+             chisq_map(:,band) =  residuals(:,s,band)*inv_N(pix,s,band)*residuals(:,s,band)
+             band_counted(band) = .true.
+          end if
+       end do
+    end do
+    chisq_in = sum(sum(chisq_map(:,:), dim=1),dim=1)
+    if (myid_chain == root .and. verbosity > 0) write(*,*) '    Chisq in =', chisq_in
+
+
+    if (myid_chain == root .and. verbosity > 2) write(*,*) '          Sampling vmap'
+    do pix = 0, npix-1
+       vmap_gauss(1)=vmap_p(pix,1) !set prior value
+!       if (verbosity > 2 .and. mod(pix,10000)) then 
+!          write(*,*) '              Pixel', pix,'of',npix
+!       end if
+       ! Compute likelihood term
+       A     = 0.d0
+       b     = 0.d0
+       l = 0
+       if (myid_chain==root  .and. pix==0) write(*,*) 'comp id, tilt nr (ref=1), tilt_id (fg_par_map)'
+       do j = 1, num_CO_comp
+          id=CO_comps(j)
+          ref_band=fg_components(id)%co_band(1)
+          nu_ref=fg_components(id)%nu_ref
+          do i = 1,fg_components(id)%nharm+1
+             l = l + 1
+             band=fg_components(id)%co_band(i)
+             tilt=par0(pix,s,tilt_id(l))
+             ! band for tilt i is co_band(i)
+             !!! DEBUG !!!
+             if (myid_chain==root .and. pix==0) write(*,*) id, l, tilt_id(l)
+             scale = (bp(band)%co2t/bp(band)%a2t) / (bp(ref_band)%co2t/bp(ref_band)%a2t) * &
+                  &  bp(band)%gain * ant2data(band)
+             
+             A = A + scale*fg_amp(pix,s,id)*nu_ref*tilt/1.d9 * inv_N(pix,s,band) * & 
+                  & scale*fg_amp(pix,s,id)*nu_ref*tilt/1.d9
+             b = b + scale*fg_amp(pix,s,id)*nu_ref*tilt/1.d9 * inv_N(pix,s,band) * &
+                  & (residuals(pix,s,band) + scale*fg_amp(pix,s,id)*vmap0(pix,1)* &
+                  & nu_ref*tilt/1.d9 ) 
+          end do
+       end do
+
+       !!! DEBUG !!!
+
+
+       if (A > 0.d0) then
+          mu    = b / A
+          sigma = sqrt(1.d0 / A)
+       else if (vmap_gauss(2) > 0.d0) then
+          mu    = 0.d0
+          sigma = 1.d30
+       else
+          mu    = vmap_uni(1) + (vmap_uni(2)-vmap_uni(1))*rand_uni(handle)
+          sigma = 0.d0
+       end if
+
+       ! Add prior
+       if (vmap_gauss(2) > 0.d0) then
+          sigma_p = vmap_gauss(2) ! equal to the rms as we dont have more than 1 pixel
+          mu      = (mu*sigma_p**2 + vmap_gauss(1) * sigma**2) / (sigma_p**2 + sigma**2)
+          sigma   = sqrt(sigma**2 * sigma_p**2 / (sigma**2 + sigma_p**2))
+       end if
+
+       ! Draw sample
+       par = -1.6375d30
+       if (trim(operation) == 'optimize') then
+          if (mu < vmap_uni(1)) then
+             par = vmap_uni(1)
+          else if (mu > vmap_uni(2)) then
+             par = vmap_uni(2)
+          else
+             par = mu
+          end if
+       else
+          do while (par < vmap_uni(1) .or. par > vmap_uni(2))
+             if (mu < vmap_uni(1)) then
+                par = rand_trunc_gauss(handle, mu, vmap_uni(1), sigma)
+             else if (mu > vmap_uni(2)) then
+                par = 2.d0*mu-rand_trunc_gauss(handle, mu, 2.d0*mu-vmap_uni(2), sigma)
+             else
+                par = mu + sigma * rand_gauss(handle)
+             end if
+          end do
+       end if
+
+       vmap_temp(pix,1)=par
+
+    end do
+
+    ! check new chisq values
+    !first calculate the new residuals (using new and old velocities), then calc. chisq
+    res_temp(:,:) = residuals(:,s,:)
+    do pix = 0, npix-1
+       l = 0
+       do j = 1, num_CO_comp
+          id=CO_comps(j)
+          ref_band=fg_components(id)%co_band(1)
+          nu_ref=fg_components(id)%nu_ref
+          do i = 1,fg_components(id)%nharm+1
+             l = l + 1
+             band=fg_components(id)%co_band(i)
+             tilt=par0(pix,s,tilt_id(l))
+             scale = (bp(band)%co2t/bp(band)%a2t) / (bp(ref_band)%co2t/bp(ref_band)%a2t) * &
+                  &  bp(band)%gain * ant2data(band)
+             res_temp(pix,band) = res_temp(pix,band) + scale*fg_amp(pix,s,id)* &
+                  & ( vmap0(pix,1) - vmap_temp(pix,1) ) * nu_ref*tilt/1.d9  
+          end do
+       end do
+    end do
+
+    chisq_map = 0.d0
+    band_counted=.false.
+
+    do j = 1, num_CO_comp
+       id=CO_comps(j)
+       do i = 1,fg_components(id)%nharm+1
+          band=fg_components(id)%co_band(i)
+          if (band_counted(band) == .false.) then !reduce identical chisq calculations
+             chisq_map(:,band) =  res_temp(:,band)*inv_N(:,s,band)*res_temp(:,band)
+             band_counted(band) = .true.
+          end if
+       end do
+    end do
+    chisq_out = sum(sum(chisq_map(:,:), dim=1),dim=1)
+    if (myid_chain == root .and. verbosity > 0) write(*,*) '    Chisq out =', chisq_out
+
+
+    if (chisq_out < chisq_in) then
+       if (myid_chain == root .and. verbosity > 2) write(*,*) '       Updating component vmaps'    
+       !update component velocity maps for the components in the group
+       do j =1,num_fg_comp
+          if (update_vmap_comp(j)) fg_components(j)%vmap = vmap_temp
+       end do
+    else
+       if (myid_chain == root .and. verbosity > 2) write(*,*) '       Chisq_out > Chisq_in'
+       if (myid_chain == root .and. verbosity > 2) write(*,*) '       Not updating vmaps. BUG!'    
+    end if
+
+    !#############################################################################!
+
+    call mpi_reduce(mystat, i, 1, MPI_INTEGER, MPI_SUM, root, comm_chain, ierr)
+    if (myid_chain == root) then
+       fg_param_map = par0
+       stat         = i
+    end if
+
+    deallocate(par0, par_prop, par_smooth)
+    deallocate(residuals, vmap0, vmap_p, vmap_temp)
+    deallocate(inv_N, chisq_map, res_temp)
+    deallocate(fg_amp, fg_par_reg)
+
+  end subroutine sample_CO_velocity_map
+
   function neg_lnL_specind_ARS(p)
     use healpix_types
     implicit none
@@ -810,6 +1148,159 @@ contains
     sample_CO_line = par
 
   end function sample_CO_line
+
+  function sample_CO_lr_velocity(id, band, tilt, harm, nu_ref)  
+    implicit none
+
+    integer(i4b), intent(in) :: id, band, harm
+    real(dp), intent(in)     :: tilt, nu_ref
+    real(dp)                 :: sample_CO_lr_velocity
+
+    integer(i4b) :: i, ref_band
+    real(dp)     :: A, b, mu, sigma, par, scale, sigma_p
+
+    ref_band = fg_components(id)%co_band(1)
+
+
+    ! Compute likelihood term
+    A     = 0.d0
+    b     = 0.d0
+    scale = (bp(band)%co2t/bp(band)%a2t) / (bp(ref_band)%co2t/bp(ref_band)%a2t) * &
+         &  bp(band)%gain * ant2data(band)
+    do i = 1, npix_reg
+       A = A + scale*amp_reg(i) * invN_reg(i,band) * scale*amp_reg(i)
+       b = b + scale*amp_reg(i) * invN_reg(i,band) * (d_reg(i,band) - & 
+            & scale*amp_reg(i)*vmap_reg(i)*nu_ref*tilt/1.d9 ) 
+       !data (i.e. d_reg) = data - all other components
+       ! One needs to also subtract the CO due to shift in frequency (radial vel.)
+    end do
+    if (A > 0.d0) then
+       mu    = b / A
+       sigma = sqrt(1.d0 / A)
+    else if (P_gauss_reg(2) > 0.d0) then
+       mu    = 0.d0
+       sigma = 1.d30
+    else
+       mu    = P_uni_reg(1) + (P_uni_reg(2)-P_uni_reg(1))*rand_uni(handle)
+       sigma = 0.d0
+    end if
+
+    ! Add prior
+    if (P_gauss_reg(2) > 0.d0) then
+       sigma_p = P_gauss_reg(2) / sqrt(real(npix_reg,dp))
+       mu      = (mu*sigma_p**2 + P_gauss_reg(1) * sigma**2) / (sigma_p**2 + sigma**2)
+       sigma   = sqrt(sigma**2 * sigma_p**2 / (sigma**2 + sigma_p**2))
+    end if
+
+    ! Draw sample
+    par = -1.d30
+    if (trim(operation) == 'optimize') then
+       if (mu < P_uni_reg(1)) then
+          par = P_uni_reg(1)
+       else if (mu > P_uni_reg(2)) then
+          par = P_uni_reg(2)
+       else
+          par = mu
+       end if
+    else
+       do while (par < P_uni_reg(1) .or. par > P_uni_reg(2))
+          if (mu < P_uni_reg(1)) then
+             par = rand_trunc_gauss(handle, mu, P_uni_reg(1), sigma)
+          else if (mu > P_uni_reg(2)) then
+             par = 2.d0*mu-rand_trunc_gauss(handle, mu, 2.d0*mu-P_uni_reg(2), sigma)
+          else
+             par = mu + sigma * rand_gauss(handle)
+          end if
+       end do
+    end if
+
+    sample_CO_lr_velocity = par
+
+  end function sample_CO_lr_velocity
+
+
+  function sample_CO_tilt_velocity(id, band, lr_in, locpar, nu_ref)  
+    implicit none
+
+    integer(i4b), intent(in) :: id, band, locpar
+    real(dp), intent(in)     :: lr_in, nu_ref
+    real(dp)                 :: sample_CO_tilt_velocity
+
+    integer(i4b) :: i, ref_band
+    real(dp)     :: A, b, mu, sigma, par, scale, sigma_p, lr
+
+    ref_band = fg_components(id)%co_band(1)
+
+    ! assigning correct line ratio when calculating the tilt of the reference band
+    lr = lr_in
+    if (locpar == fg_components(id)%nharm+1) lr = 1.d0
+
+    ! Compute likelihood term
+    A     = 0.d0
+    b     = 0.d0
+    scale = (bp(band)%co2t/bp(band)%a2t) / (bp(ref_band)%co2t/bp(ref_band)%a2t) * &
+         &  bp(band)%gain * ant2data(band)
+    do i = 1, npix_reg
+       A = A + scale*(amp_reg(i)*vmap_reg(i)*nu_ref/1.d9) * invN_reg(i,band) * &
+            & scale*(amp_reg(i)*vmap_reg(i)*nu_ref/1.d9)
+       !usually for line ratio one has d_reg=amp_reg*LR + noise
+       !here we have d_reg=amp_reg*nu_shift*tilt, so amp_reg has to become amp_reg*nu_shift
+       ! nu_shift (in units of GHz^-1) is vmap_reg/1.d9, as vmap_reg is in Hz
+       b = b + scale*(amp_reg(i)*vmap_reg(i)*nu_ref/1.d9) * invN_reg(i,band) * &
+            & (d_reg(i,band) - scale*amp_reg(i)*lr ) 
+       !data (i.e. d_reg) = data - all other components
+       ! One needs to also subtract the CO without tilt to only fit the tilt. 
+    end do
+
+    if (A > 0.d0) then
+       mu    = b / A
+       sigma = sqrt(1.d0 / A)
+    else if (P_gauss_reg(2) > 0.d0) then
+       mu    = 0.d0
+       sigma = 1.d30
+    else
+       mu    = P_uni_reg(1) + (P_uni_reg(2)-P_uni_reg(1))*rand_uni(handle)
+       sigma = 0.d0
+    end if
+
+
+    ! Add prior
+    if (P_gauss_reg(2) > 0.d0) then
+       write(*,*) "pre-prior:  p_local =",locpar,"mu =", mu,"sigma =",sigma
+       sigma_p = P_gauss_reg(2) / sqrt(real(npix_reg,dp))
+       mu      = (mu*sigma_p**2 + P_gauss_reg(1) * sigma**2) / (sigma_p**2 + sigma**2)
+       sigma   = sqrt(sigma**2 * sigma_p**2 / (sigma**2 + sigma_p**2))
+       write(*,*) "post-prior: p_local =",locpar,"mu =", mu,"sigma =",sigma
+    end if
+
+
+
+    ! Draw sample
+    par = -1.d30
+    if (trim(operation) == 'optimize') then
+       if (mu < P_uni_reg(1)) then
+          par = P_uni_reg(1)
+       else if (mu > P_uni_reg(2)) then
+          par = P_uni_reg(2)
+       else
+          par = mu
+       end if
+    else
+       do while (par < P_uni_reg(1) .or. par > P_uni_reg(2))
+          if (mu < P_uni_reg(1)) then
+             par = rand_trunc_gauss(handle, mu, P_uni_reg(1), sigma)
+          else if (mu > P_uni_reg(2)) then
+             par = 2.d0*mu-rand_trunc_gauss(handle, mu, 2.d0*mu-P_uni_reg(2), sigma)
+          else
+             par = mu + sigma * rand_gauss(handle)
+          end if
+       end do
+    end if
+
+
+    sample_CO_tilt_velocity = par
+
+  end function sample_CO_tilt_velocity
 
   subroutine init_ind(residuals_in, inv_N_in, index_map, fg_amp)
     implicit none
