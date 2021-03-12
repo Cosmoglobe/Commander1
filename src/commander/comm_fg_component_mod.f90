@@ -610,16 +610,31 @@ contains
           !vmap_group == 0, is equivalent to no vmap. This should set all tilt parameters,
           ! the tilt RMS, and the velocity map to zero (i.e. it becomes the old CO comp)
           call get_parameter(paramfile, paramname, par_int=fg_components(i)%vmap_group)
+          if (fg_components(i)%vmap_group < 0) fg_components(i)%vmap_group=0 
 
           !allocate velocity map, read in and get sampling flag and sampling RMS
           allocate(fg_components(i)%vmap(0:npix-1,1))
           if (fg_components(i)%vmap_group > 0) then
+             if (fg_components(i)%vmap_group > num_fg_comp) then
+                write(*,*) 'The maximum CO_VELOCITY_GROUP number is equal to the number of components, ref. component '//i_text
+                call mpi_finalize(ierr)
+                stop
+             end if
+
              call int2string(fg_components(i)%vmap_group, j_text)
 
+             ! the parameters for the CO groups are group specific, thus all components
+             ! who share the same group gets the same parameter to read from
              paramname = 'CO_VELOCITY_GROUP_MAP' // j_text   ! group specific
              call get_parameter(paramfile, paramname, par_string=filename)
+             if (trim(filename)=='none') then
+                write(*,*) 'To set the velocity map of a CO velocity component '//i_text//' to zero,'// &
+                     & 'do not set the CO_VELOCITY_GROUP_MAP'//j_text//' to "none", but set the group number to 0'
+                call mpi_finalize(ierr)
+                stop
+             end if
              call read_map(filename,fg_components(i)%vmap)
-             paramname = 'SAMPLE_CO_VELOCITY_MAP' // i_text
+             paramname = 'SAMPLE_CO_VELOCITY_GROUP_MAP' // j_text ! group specific
              call get_parameter(paramfile, paramname, par_lgt=fg_components(i)%sample_vmap)
              if (fg_components(i)%sample_vmap==.true.) then
                 allocate(fg_components(i)%vmap_prior(0:npix-1,1))
@@ -628,7 +643,7 @@ contains
                 call get_parameter(paramfile, paramname, par_dp=fg_components(i)%vmap_rms)
                 fg_components(i)%vmap_prior=fg_components(i)%vmap
              end if
-          else
+          else !velocity map groupis 0, i.e. regular CO_multiline component
              fg_components(i)%vmap = 0.d0
              fg_components(i)%sample_vmap = .false.
              fg_components(i)%vmap_rms = 0.d0
@@ -712,7 +727,7 @@ contains
              !set tilt prior mean and RMS to zero
              fg_components(i)%gauss_prior(fg_components(i)%nharm+1:,:) = 0.d0
              !set tilt defaults to zero
-             fg_components(i)%priors(fg_components(i)%nharm+1:,3)) = 0.d0
+             fg_components(i)%priors(fg_components(i)%nharm+1:,3) = 0.d0
           end if
        else if (trim(fg_components(i)%type) == 'AME_freq_shift') then
 
@@ -1134,7 +1149,7 @@ contains
             & fg_comp%co_band(1:fg_comp%npar+1), fg_comp%nu_ref, fg_params) * ant2data(band)
 
     else if (trim(fg_comp%type) == 'CO_velocity') then
-
+       !Like the multiline CO component, compute the effective fg spectrum
        get_effective_fg_spectrum = compute_CO_velocity_spectrum(band, &
             & fg_comp%co_band(1:fg_comp%nharm+1), fg_comp%nu_ref, fg_params, fg_comp%vmap(pixel,1)) * ant2data(band)
 
@@ -1197,7 +1212,7 @@ contains
        end if
 
     elseif (trim(fg_comp%type) == 'CO_velocity') then
-
+       !similar to the COmultiline comp
        if (band == fg_comp%co_band(1)) then
           get_effective_deriv_fg_spectrum = 0.d0          
        else
@@ -1329,6 +1344,7 @@ contains
              allocate(map(0:npix-1,nmaps))
              call int2string(k,i_text)
              if (trim(fg_components(k)%type) == 'CO_velocity') then
+                !CO_velocity index maps are slightly different, as from parameter nharm+1 we read in the tilt params.
                 if (m > (fg_components(k)%npar-1)/2) then
                    call int2string(m-(fg_components(k)%npar-1)/2-1,j_text)
                    call get_parameter(paramfile, 'INIT_BP_TILT_INDEX_MAP' // i_text // '_' // j_text, par_string=filename)
@@ -1485,9 +1501,9 @@ contains
        !     & fg_comp%co_band(1:fg_comp%npar+1), fg_comp%nu_ref, fg_params)
        get_ideal_fg_spectrum = 0.d0
     else if (trim(fg_comp%type) == 'CO_velocity') then
-       !get_ideal_spectrum = compute_CO_multiline_spectrum(band, &
+       !get_ideal_spectrum = compute_CO_velocity_spectrum(band, &
        !     & fg_comp%co_band(1:fg_comp%npar+1), fg_comp%nu_ref, fg_params)
-       get_ideal_fg_spectrum = 0.d0
+       get_ideal_fg_spectrum = 0.d0 !follow multiline comp
     else if (trim(fg_comp%type) == 'cmb') then
        get_ideal_fg_spectrum = 1.d0 / compute_ant2thermo_single(nu)
     else if (trim(fg_comp%type) == 'sz') then
@@ -1670,8 +1686,7 @@ contains
 
   end function compute_CO_multiline_spectrum
 
-  ! tilt (i.e. par(i+n+1) ) is defined as bandpass shift per GHz. 
-  ! Note that nu_shift is given in Hz
+  !function similar to the multiine comp, but with some variation due to the tilt parameter
   function compute_CO_velocity_spectrum(band, co_band, nu_ref, par, rel_nu_shift, deriv)
     implicit none
 
@@ -1684,13 +1699,31 @@ contains
 
     integer(i4b) :: i, n
 
+    ! band (integer): band number to compute the spectrum for
+    !   
+    ! co_band (integer, array): array with the band numbers of the CO harmonics (co_band(1) is the reference band)
+    !
+    ! nu_ref (real dp): component reference frequency (in Hz)
+    !
+    ! par (real dp, array): array of all the components parameters (here line ratios and tilts) 
+    !    the input is for the given pixel (see parent function call(s) )
+    !
+    ! rel_nu_shift (real dp): relative frequency shift due to CO cloud velocity, for the given pixel (see parent call(s) )
+    !
+    ! deriv (bool): whether to compute the derivative (should never be used)
+    !
+    ! Note!
+    ! tilt (i.e. par(i+n+1) ) is defined as bandpass shift per GHz, need to transform freq. shift into GHz 
+    ! Note that nu_shift (rel_nu_shift*nu_ref) is given in Hz
+
     n=(size(par)-1)/2 !n=fg_comp%nharm
     compute_CO_velocity_spectrum = 0.d0
-    if (band == co_band(1)) then
+    if (band == co_band(1)) then !reference band, line ratio defined as 1.d0
        compute_CO_velocity_spectrum = 1.d0 + par(n+1)*rel_nu_shift*nu_ref/1.d9
     else
        do i = 1, n
           if (band == co_band(i+1)) then
+             !need to add the co2t and a2t parameters of band vs. reference band (like the CO multiline component)
              compute_CO_velocity_spectrum = (par(i)+par(i+n+1)*rel_nu_shift*nu_ref/1.d9) * &
                   & (bp(band)%co2t/bp(band)%a2t) / (bp(co_band(1))%co2t/bp(co_band(1))%a2t)
              if (present(deriv)) then

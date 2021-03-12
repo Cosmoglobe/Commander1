@@ -361,10 +361,11 @@ contains
        inc_band                                         = .false.
        inc_band(fg_components(comp)%co_band(p_local+1)) = .true.
     elseif (trim(fg_components(comp)%type) == 'CO_velocity') then
+       ! find band number corresponding to CO parameter p_local 
        inc_band                                         = .false.
-       if (p_local > fg_components(comp)%nharm) then
+       if (p_local > fg_components(comp)%nharm) then ! p_local is a tilt parameter, subtract nharm from p_local
           inc_band(fg_components(comp)%co_band(p_local-fg_components(comp)%nharm)) = .true.
-       else
+       else ! add 1 to p_local as co_band(1) is the reference band
           inc_band(fg_components(comp)%co_band(p_local+1)) = .true.
        end if
     end if
@@ -378,7 +379,7 @@ contains
        d_reg(i,:)  = data(pix,s,:)
        amp_reg(i)  = amp(pix,s,comp)
        if (trim(fg_components(comp)%type) == 'CO_velocity') then
-          vmap_reg(i) = fg_components(comp)%vmap(pix,1)
+          vmap_reg(i) = fg_components(comp)%vmap(pix,1) !set vmap value for the pixels in the region
        end if
        s_reg(i)    = s
        w_reg(i)    = region%w(i)
@@ -433,23 +434,33 @@ contains
        if (present(chisq_out)) chisq_out = -2.d0*lnL_specind_ARS(par)
 
     elseif (trim(fg_components(comp)%type) == 'CO_velocity') then 
+       ! Note!
+       ! p is a global counter for the spectral parameters (starting from parameter 1 of component 1)
+       ! p_local is the counter of the spectral parameters of the current CO_velocity component
+       ! i.e. if p_local > nharm (number of harmonics), hten p is a tilt parameter and the co_band
+       ! is given by p_local-nharm, and line ratios are given by p-nharm (except if p_local == nharm+1)
 
-       !! NOT FINISHED !!
+       ! par_map(1,1,p) is the tilt of the reference band
+       ! the (1,1,p) is just pixel 1 in map 1 for parameter p (LR and tilt are fullsky anyways)
+       ! the parameter passed to the sampling functions are the corresponding line ratio/tilt of the same band
+       ! this is so that one can subtract the data from the reduced data set (see the functions)
 
-       ! Draw amplitude with Gaussian sampler
-       if (p_local == fg_components(comp)%nharm+1) then
+       ! Draw amplitude with Gaussian sampler (similar to CO multiline)
+       if (p_local == fg_components(comp)%nharm+1) then ! sampling tilt of reference band
           par = sample_CO_tilt_velocity(comp, fg_components(comp)%co_band(p_local- &
                & fg_components(comp)%nharm),par_map(1,1,p),p_local, &
                & fg_components(comp)%nu_ref)
-       else if (p_local > fg_components(comp)%nharm + 1) then
+       else if (p_local > fg_components(comp)%nharm + 1) then ! sampling tilt of harmonics
           par = sample_CO_tilt_velocity(comp, fg_components(comp)%co_band(p_local- &
                & fg_components(comp)%nharm),par_map(1,1,p-(fg_components(comp)%nharm+1)), &
                & p_local, fg_components(comp)%nu_ref)
-       else
+       else ! sampling Line ratio
           par = sample_CO_lr_velocity(comp, fg_components(comp)%co_band(p_local+1), &
                & par_map(1,1,p+(fg_components(comp)%nharm+1)),p_local, &
                & fg_components(comp)%nu_ref)
        end if
+
+       ! set the global parameter map to the newly sampled value
        do i = 1, region%n
           par_map(region%pix(i,1),region%pix(i,2),p_reg) = par
        end do
@@ -690,6 +701,8 @@ contains
 
   end subroutine sample_spec_index_single_region
 
+  ! The following subroutine is written in order to sample the velocity map of a (several) CO_velocity component(s)
+  ! It is not working as of 10.03.2021, but it is being worked on!
   subroutine sample_CO_velocity_map(s0, residuals_in, inv_N_in, fg_amp_in, fg_param_map, co_group, stat)
     implicit none
     
@@ -1095,6 +1108,8 @@ contains
     integer(i4b) :: i, ref_band
     real(dp)     :: A, b, mu, sigma, par, scale, sigma_p
 
+    !sampler the line ratio for the CO multiline component
+
     ref_band = fg_components(id)%co_band(1)
 
     ! Compute likelihood term
@@ -1159,10 +1174,20 @@ contains
     integer(i4b) :: i, ref_band
     real(dp)     :: A, b, mu, sigma, par, scale, sigma_p
 
+    ! id (integer): parameter id (to get the correct component)
+    !
+    ! band (integer): band number for the corresponding data band of the sampled parameter (co_band(p_local))
+    !
+    ! tilt (real dp): bandpass tilt (in same units of LR and per GHz) 
+    !
+    ! harm (integer): local parameter index (harmonic) for the parameter to be sampled
+    !
+    ! nu_ref (real dp): reference frequency of the component (in Hz)
+
     ref_band = fg_components(id)%co_band(1)
 
-
     ! Compute likelihood term
+    ! computed similar to the CO multiline component
     A     = 0.d0
     b     = 0.d0
     scale = (bp(band)%co2t/bp(band)%a2t) / (bp(ref_band)%co2t/bp(ref_band)%a2t) * &
@@ -1171,9 +1196,12 @@ contains
        A = A + scale*amp_reg(i) * invN_reg(i,band) * scale*amp_reg(i)
        b = b + scale*amp_reg(i) * invN_reg(i,band) * (d_reg(i,band) - & 
             & scale*amp_reg(i)*vmap_reg(i)*nu_ref*tilt/1.d9 ) 
-       !data (i.e. d_reg) = data - all other components
-       ! One needs to also subtract the CO due to shift in frequency (radial vel.)
+       ! reduced data (i.e. d_reg) = data - all other components
+       ! One needs to also subtract the CO signal due to bandpass tilt and 
+       ! Doppler shift in frequency from the CO-clouds' radial velocity
+       ! vmap_reg is relativ frequency shift (w.r.t. nu_ref), and tilt is per GHz (nu_ref in Hz)
     end do
+
     if (A > 0.d0) then
        mu    = b / A
        sigma = sqrt(1.d0 / A)
@@ -1229,13 +1257,24 @@ contains
     integer(i4b) :: i, ref_band
     real(dp)     :: A, b, mu, sigma, par, scale, sigma_p, lr
 
+    ! id (integer): parameter id (to get the correct parameter
+    !
+    ! band (integer): band number for the corresponding data band of the tilt parameter (co_band(p_local-nharm))
+    !
+    ! lr_in (real dp): line ratio of the given band
+    !
+    ! locpar (integer): local parameter index for the parameter to be sampled
+    !
+    ! nu_ref (real dp): reference frequency of the component (in Hz)
+
     ref_band = fg_components(id)%co_band(1)
 
     ! assigning correct line ratio when calculating the tilt of the reference band
     lr = lr_in
-    if (locpar == fg_components(id)%nharm+1) lr = 1.d0
+    if (locpar == fg_components(id)%nharm+1) lr = 1.d0 ! if reference band tilt, line ratio = 1.d0 (tilt was given)
 
     ! Compute likelihood term
+    ! computed similar to the CO multiline component
     A     = 0.d0
     b     = 0.d0
     scale = (bp(band)%co2t/bp(band)%a2t) / (bp(ref_band)%co2t/bp(ref_band)%a2t) * &
@@ -1248,8 +1287,9 @@ contains
        ! nu_shift (in units of GHz^-1) is vmap_reg/1.d9, as vmap_reg is in Hz
        b = b + scale*(amp_reg(i)*vmap_reg(i)*nu_ref/1.d9) * invN_reg(i,band) * &
             & (d_reg(i,band) - scale*amp_reg(i)*lr ) 
-       !data (i.e. d_reg) = data - all other components
-       ! One needs to also subtract the CO without tilt to only fit the tilt. 
+       !reduced data (i.e. d_reg) = data - all other components
+       ! One needs to also subtract the CO without tilt (i.e. subtract the line ratio contribution) 
+       !in order to only fit the tilt. 
     end do
 
     if (A > 0.d0) then
@@ -1264,7 +1304,7 @@ contains
     end if
 
 
-    ! Add prior
+    ! Add prior if the prior RMS > 0
     if (P_gauss_reg(2) > 0.d0) then
        write(*,*) "pre-prior:  p_local =",locpar,"mu =", mu,"sigma =",sigma
        sigma_p = P_gauss_reg(2) / sqrt(real(npix_reg,dp))

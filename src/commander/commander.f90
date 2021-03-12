@@ -57,6 +57,8 @@ program commander
 
   real(dp) :: nu
 
+  logical(lgt), allocatable, dimension(:)           :: sample_vmap_group !flag to sample CO cloud velocities
+
   call mpi_init(ierr)
   call mpi_comm_rank(MPI_COMM_WORLD, myid, ierr)
   call mpi_comm_size(MPI_COMM_WORLD, numprocs, ierr)
@@ -665,6 +667,45 @@ contains
 !       stop
 
        ! **********************************************
+       !          Sample CO cloud velocity maps
+       ! **********************************************
+       ! Several CO_velocity type components may share the same cloud velocity map
+       ! Therefore we may sample the cloud velocity map using more than 1 component, and potentiall more data bands 
+       ! BUT! We only sample the velocity maps that are given to be sampled!
+
+       ! *Disclaimer*: The sampling routine is not working properly as of 10.03.2021, but is being debugged
+
+       if (num_fg_comp > 0 .and. stat == 0) then
+          ! we allocate a maximum number of groups equal to the number of components (we will not need more)
+          allocate(sample_vmap_group(0:num_fg_comp))
+          sample_vmap_group=.false.
+          do k = 1, num_fg_comp ! loop through all components
+             if (trim(fg_components(k)%type) == 'CO_velocity') then
+                if (fg_components(k)%sample_vmap == .true.) then
+                   !sample the global vmap group
+                   sample_vmap_group(fg_components(k)%vmap_group)=.true.
+                end if
+             end if
+          end do
+                    
+          ! we do not sample vmap_group 0 as that is equivalent to a vmap=0, tilt=0 CO component
+          ! in other words a regular CO_multiline component 
+          do k = 1, num_fg_comp 
+             if (sample_vmap_group(k)) then
+                if (verbosity > 1) write(*,*) 'Chain no. ', chain, ' -- sampling CO velocity map, group nr.', k
+                call compute_lowres_residual(s_i)
+                call compute_lowres_fg_amp(s_i%fg_amp, fg_amp_lowres)
+                ! check chisq before and after sampling?
+                call sample_CO_velocity_map(s_i, residuals_lowres, inv_N_scaled, &
+                     & fg_amp_lowres, fg_param_map, k, stat)
+                if (stat == 0) call update_fg_pix_response_maps(fg_param_map)
+             end if
+          end do
+          deallocate(sample_vmap_group)
+       end if
+
+
+       ! **********************************************
        !             Sample global parameters
        ! **********************************************
        if (.false. .and. num_fg_par > 0 .and. stat == 0) then
@@ -678,7 +719,6 @@ contains
 !!$       write(*,*) 'f'
 !!$       call output_sample(paramfile, 2, 6, s_i, skip_freq, cl_i, fg_param_map, noiseamp, bp%gain, bp%delta)
 !       stop
-
 
        ! **********************************************
        !             Sample CMB power spectrum
