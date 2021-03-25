@@ -625,7 +625,7 @@ contains
 
              ! the parameters for the CO groups are group specific, thus all components
              ! who share the same group gets the same parameter to read from
-             paramname = 'CO_VELOCITY_GROUP_MAP' // j_text   ! group specific
+             paramname = 'CO_VELOCITY_MAP_GROUP' // j_text   ! group specific
              call get_parameter(paramfile, paramname, par_string=filename)
              if (trim(filename)=='none') then
                 write(*,*) 'To set the velocity map of a CO velocity component '//i_text//' to zero,'// &
@@ -634,12 +634,12 @@ contains
                 stop
              end if
              call read_map(filename,fg_components(i)%vmap)
-             paramname = 'SAMPLE_CO_VELOCITY_GROUP_MAP' // j_text ! group specific
+             paramname = 'CO_VELOCITY_SAMPLE_MAP_GROUP' // j_text ! group specific
              call get_parameter(paramfile, paramname, par_lgt=fg_components(i)%sample_vmap)
              if (fg_components(i)%sample_vmap==.true.) then
                 allocate(fg_components(i)%vmap_prior(0:npix-1,1))
                 call int2string(fg_components(i)%vmap_group, j_text)
-                paramname = 'CO_VELOCITY_MAP_GROUP_GAUSSIAN_STDDEV' // j_text ! group specific
+                paramname = 'CO_VELOCITY_GAUSSIAN_STDDEV_GROUP' // j_text ! group specific
                 call get_parameter(paramfile, paramname, par_dp=fg_components(i)%vmap_rms)
                 fg_components(i)%vmap_prior=fg_components(i)%vmap
              end if
