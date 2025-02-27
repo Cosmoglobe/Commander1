@@ -102,16 +102,16 @@ contains
        call get_parameter(paramfile, 'NSIDE',                     par_int=nside)
        call get_parameter(paramfile, 'LMAX',                      par_int=lmax)
        call get_parameter(paramfile, 'POLARIZATION',              par_lgt=polarization)
-       call get_parameter(paramfile, 'MASKFILE',                  par_string=maskfile)
-       call get_parameter(paramfile, 'MASKFILE_CALIB'//map_text,  par_string=maskfile_calib)
+       call get_parameter(paramfile, 'MASKFILE',                  par_string=maskfile, path=base_path)
+       call get_parameter(paramfile, 'MASKFILE_CALIB'//map_text,  par_string=maskfile_calib, path=base_path)
        call get_parameter(paramfile, 'OUTPUT_CMB_FREQUENCY_MAPS', par_lgt=output_cmb_freq_map)
        call get_parameter(paramfile, 'ENFORCE_ZERO_CL',           par_lgt=enforce_zero_cl)
        call get_parameter(paramfile, 'OPERATION',                 par_string=operation)
        call get_parameter(paramfile, 'CORR_CHISQ_THRESHOLD',      par_dp=corr_chisq_threshold)
        call get_parameter(paramfile, 'LMAX_CORR',                 par_int=lmax_corr)
-       call get_parameter(paramfile, 'MASKFILE_CORR',             par_string=maskfile_corr)
+       call get_parameter(paramfile, 'MASKFILE_CORR',             par_string=maskfile_corr, path=base_path)
        call get_parameter(paramfile, 'NSIDE_CORR',                par_int=nside_corr)
-       call get_parameter(paramfile, 'TEMPLATE_AMP_INPUT',        par_string=temp_amp_file)
+       call get_parameter(paramfile, 'TEMPLATE_AMP_INPUT',        par_string=temp_amp_file, path=base_path)
        call get_parameter(paramfile, 'OUTPUT_MIXING_MATRIX',      par_lgt=output_mixmat)
        call get_parameter(paramfile, 'REGULARIZATION_NOISE',      par_dp=reg_noise)
        call get_parameter(paramfile, 'REG_NOISE_SCALE'//map_text, par_dp=reg_scale)
@@ -147,7 +147,7 @@ contains
              call int2string(j,temp_text)
              paramtext = 'FG_TEMPLATE' // map_text // '_' // temp_text
              call get_parameter(paramfile, trim(paramtext), &
-                  & par_string=temp_names(j))
+                  & par_string=temp_names(j), path=base_path)
           end do
 
        else
@@ -301,7 +301,7 @@ contains
           call int2string(i, map_text)
 
           paramtext = 'NOISE_RMS' // map_text
-          call get_parameter(paramfile, trim(paramtext), par_string=rmsfile)
+          call get_parameter(paramfile, trim(paramtext), par_string=rmsfile, path=base_path)
           paramtext = 'REG_NOISE_SCALE' // map_text
           call get_parameter(paramfile, trim(paramtext), par_dp=my_reg_scale)
           paramtext = 'REGULARIZATION_NOISE'
@@ -335,7 +335,7 @@ contains
              do j = 1, num_fg_temp-num_md_temp
                 call int2string(j,temp_text)
                 paramtext = 'FG_TEMPLATE' // map_text // '_' // temp_text
-                call get_parameter(paramfile, trim(paramtext), par_string=filename)
+                call get_parameter(paramfile, trim(paramtext), par_string=filename, path=base_path)
                 call read_map(filename, map_in)
                 if (nmaps==3 .and. (.not. sample_T_modes)) map_in(:,1) = 0.d0
                 fg_temp_lowres(:,:,i,num_md_temp+j) = map_in
@@ -396,7 +396,7 @@ contains
     
     ! Get filenames
     paramtext = 'MAP' // map_text // '_' // realization_text
-    call get_parameter(paramfile, trim(paramtext), par_string=cmbfile)
+    call get_parameter(paramfile, trim(paramtext), par_string=cmbfile, path=base_path)
 
     ! Read the CMB data
     allocate(map_in(0:npix-1,nmaps))
@@ -425,7 +425,7 @@ contains
              call get_parameter(paramfile, trim(paramtext), par_dp=my_reg_noise)
              my_reg_noise = my_reg_noise * my_reg_scale
              paramtext = 'MAP' // map_text // '_' // realization_text
-             call get_parameter(paramfile, trim(paramtext), par_string=cmbfile)
+             call get_parameter(paramfile, trim(paramtext), par_string=cmbfile, path=base_path)
              call read_map(cmbfile, map_in)
              call rand_init(noise_handle, i)
              if (my_reg_noise /= 0.d0) then

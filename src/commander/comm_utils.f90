@@ -728,7 +728,7 @@ contains
 
 
   subroutine get_parameter(parfile, parname, par_int, par_char, &
-       & par_string, par_sp, par_dp, par_lgt, par_present, desc)
+       & par_string, par_sp, par_dp, par_lgt, par_present, desc, path)
     implicit none
     character(len=*)           :: parfile, parname
     integer(i4b),     optional :: par_int
@@ -739,6 +739,7 @@ contains
     logical(lgt),     optional :: par_lgt
     logical(lgt),     optional :: par_present
     character(len=*), optional :: desc
+    character(len=*), optional :: path
 
     logical(lgt)               :: found
     integer(i4b)               :: unit
@@ -749,12 +750,23 @@ contains
     if(found) then
        if(present(par_present)) par_present = .true.
     else
-       call get_parameter_parfile(unit, parfile, parname, par_int, par_char, par_string, par_sp, par_dp, par_lgt, par_present, desc)
+       call get_parameter_parfile(unit, parfile, parname, par_int, par_char, par_string, par_sp, par_dp, par_lgt, par_present, desc, path)
+    end if
+    ! add base path in front of string when asked
+    if(present(par_string) .and. present(path)) then
+       !write(*,*) 'path present', par_string(1:1)
+       if (par_string(1:1) /= '/') then
+          if (trim(par_string) /= 'none' .and. par_string(1:7) /= 'fullsky' .and. par_string(1:10) /= 'single_pix') then   
+             !write(*,*) 'par_string 1 ', trim(par_string)
+             par_string = trim(path)//"/"//trim(par_string)
+             !write(*,*) 'par_string 2 ', trim(par_string)
+          end if
+       end if
     end if
   end subroutine
 
   subroutine get_parameter_parfile(unit, parfile, parname, par_int, par_char, &
-       & par_string, par_sp, par_dp, par_lgt, par_present, desc)
+       & par_string, par_sp, par_dp, par_lgt, par_present, desc, path)
     implicit none
     integer(i4b)               :: unit
     character(len=*)           :: parfile, parname
@@ -766,6 +778,7 @@ contains
     logical(lgt),     optional :: par_lgt
     logical(lgt),     optional :: par_present
     character(len=*), optional :: desc
+    character(len=*), optional :: path
 
     logical(lgt)               :: found
     integer(i4b), parameter    :: maxdepth = 256
@@ -775,7 +788,7 @@ contains
 
     depth = 1
     units(depth) = getlun()
-    !write(*,*) "Entering file " // trim(parfile)
+    !write(*,*) "Entering file " // trim(parfile) 
     filenames(depth) = parfile
     open(units(depth),file=trim(parfile),status="old",err=4)
     do while(depth >= 1)
@@ -800,8 +813,13 @@ contains
           call parse_parameter(line, parname, found, par_int, par_char, par_string, par_sp, par_dp, par_lgt)
           if(found) then
              ! Match found, so clean up and return.
-             do i = depth, 1, -1; close(units(i)); end do
-             if(present(par_present)) par_present = .true.
+             do i = depth, 1, -1
+                close(units(i))
+             end do
+             if(present(par_present)) then
+                !write(*,*) 'par present', par_string(1:1)
+                par_present = .true.
+             end if
              return
           end if
        end if
@@ -945,6 +963,7 @@ contains
           read(value,*) par_char
        elseif (present(par_string)) then
           read(value,*) par_string
+          par_string = trim(adjustl(par_string))
        elseif (present(par_sp)) then
           read(value,*) par_sp
        elseif (present(par_dp)) then

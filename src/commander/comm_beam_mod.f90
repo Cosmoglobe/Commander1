@@ -44,7 +44,7 @@ contains
     call get_parameter(paramfile, 'FWHM_LOWRES',             par_dp=fwhm_lowres)       
     call get_parameter(paramfile, 'POLARIZATION',            par_lgt=polarization)     
     call get_parameter(paramfile, 'BEAM_CONVOLUTION_METHOD', par_string=convolution_method)     
-    call get_parameter(paramfile, 'PIXEL_WINDOW',            par_string=pixwinfile)
+    call get_parameter(paramfile, 'PIXEL_WINDOW',            par_string=pixwinfile, path=base_path)
     npix = 12*nside**2
 
    if (polarization) then
@@ -54,7 +54,7 @@ contains
     end if
 
     paramtext = 'BEAM' // map_text
-    call get_parameter(paramfile, trim(paramtext), par_string=beamfile)
+    call get_parameter(paramfile, trim(paramtext), par_string=beamfile, path=base_path)
 
 
     ! Read beam transfer function; needed even for effective beam for preconditioning

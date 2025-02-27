@@ -130,7 +130,7 @@ contains
        nmaps = 1
     end if
 
-    call get_parameter(paramfile,    'MASKFILE', par_string=filename)
+    call get_parameter(paramfile,    'MASKFILE', par_string=filename, path=base_path)
     allocate(mask(0:12*nside**2-1,nmaps))
     call read_map(filename, mask)
     where (mask < 0.5d0)
@@ -175,7 +175,7 @@ contains
        call get_parameter(paramfile, paramname, par_lgt=fg_components(i)%sample_amplitudes)
 
        paramname = 'COMPONENT_MASK' // i_text
-       call get_parameter(paramfile, paramname, par_string=maskname)
+       call get_parameter(paramfile, paramname, par_string=maskname, path=base_path)
        allocate(fg_components(i)%mask(0:npix-1,nmaps))
        if (trim(maskname) == 'fullsky') then
           fg_components(i)%mask = 1.d0
@@ -190,7 +190,7 @@ contains
        if (.not. sample_inside_mask) fg_components(i)%mask = fg_components(i)%mask * mask
 
        paramname = 'INDEX_SAMPLING_MASK' // i_text
-       call get_parameter(paramfile, paramname, par_string=maskname)
+       call get_parameter(paramfile, paramname, par_string=maskname, path=base_path)
        allocate(fg_components(i)%indmask(0:npix-1,nmaps))
        if (trim(maskname) == 'fullsky') then
           fg_components(i)%indmask = 1.d0
@@ -206,7 +206,7 @@ contains
 
        if (optimize_priors) then
           paramname = 'PRIOR_OPTIMIZATION_MASK' // i_text
-          call get_parameter(paramfile, paramname, par_string=maskname)
+          call get_parameter(paramfile, paramname, par_string=maskname, path=base_path)
           allocate(fg_components(i)%priormask(0:npix-1,nmaps))
           if (trim(maskname) == 'fullsky') then
              fg_components(i)%priormask = 1.d0
@@ -328,9 +328,9 @@ contains
                & i_text, par_dp=fg_components(i)%gauss_prior(1,2))
 
           paramname = 'EMISSION_FILENAME' // i_text
-          call get_parameter(paramfile, paramname, par_string=filename_emission)
+          call get_parameter(paramfile, paramname, par_string=filename_emission, path=base_path)
           paramname = 'U_FILENAME' // i_text
-          call get_parameter(paramfile, paramname, par_string=filename_u)
+          call get_parameter(paramfile, paramname, par_string=filename_u, path=base_path)
           call read_phys_dust_spectrum(filename_emission, filename_u, spectrum, u_array, fg_components(i)%nu_ref)
 
           allocate(fg_components(i)%S_phys_dust(size(spectrum,1),size(spectrum,2)))
@@ -619,7 +619,7 @@ contains
                & i_text, par_dp=fg_components(i)%gauss_prior(1,2))
 
           paramname = 'SPECTRUM_FILENAME' // i_text
-          call get_parameter(paramfile, paramname, par_string=filename_spectrum)
+          call get_parameter(paramfile, paramname, par_string=filename_spectrum, path=base_path)
           call read_spectrum(filename_spectrum, spectrum)
           ! Normalize to unity, to get rid of numerical errors
           spectrum(:,2) = spectrum(:,2) / maxval(spectrum(:,2))
@@ -698,7 +698,7 @@ contains
                & i_text, par_dp=fg_components(i)%gauss_prior(2,2))
 
           paramname = 'SPECTRUM_FILENAME' // i_text
-          call get_parameter(paramfile, paramname, par_string=filename_spectrum)
+          call get_parameter(paramfile, paramname, par_string=filename_spectrum, path=base_path)
           call read_spectrum(filename_spectrum, spectrum)
           spectrum(:,2) = spectrum(:,2) / maxval(spectrum(:,2))
 
@@ -806,7 +806,7 @@ contains
                & i_text, par_dp=fg_components(i)%gauss_prior(1,2))
 
           paramname = 'SPECTRUM_FILENAME' // i_text
-          call get_parameter(paramfile, paramname, par_string=filename_spectrum)
+          call get_parameter(paramfile, paramname, par_string=filename_spectrum, path=base_path)
           call read_spectrum(filename_spectrum, spectrum)
           ! Normalize to unity, to get rid of numerical errors
           spectrum(:,2) = spectrum(:,2) / maxval(spectrum(:,2))
@@ -917,7 +917,7 @@ contains
        do j = 1, fg_components(i)%npar
           call int2string(j, j_text)
           paramname = 'REGION_DEFINITION' // i_text // '_' // j_text
-          call get_parameter(paramfile, paramname, par_string=filename)
+          call get_parameter(paramfile, paramname, par_string=filename, path=base_path)
           call initialize_index_regions(chaindir, i, j, filename, mask, fg_components(i)%mask, nside, nmaps, &
                & fg_components(i)%fwhm_p(j), fg_components(i)%indregs(j), fg_components(i)%priors(j,1:2))
        end do
@@ -1176,7 +1176,7 @@ contains
              allocate(map(0:npix-1,nmaps))
              call int2string(k,i_text)
              call int2string(m,j_text)
-             call get_parameter(paramfile, 'INIT_INDEX_MAP' // i_text // '_' // j_text, par_string=filename)
+             call get_parameter(paramfile, 'INIT_INDEX_MAP' // i_text // '_' // j_text, par_string=filename, path=base_path)
              call read_map(filename, map)
              if (trim(fg_components(k)%type) == 'freefree_EM' .and. m ==1) then
                 map = log(map)

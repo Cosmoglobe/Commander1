@@ -132,6 +132,7 @@ program commander
   call get_parameter(paramfile, 'PRECOMPUTE_PLMS',    par_int=precompute_plms)
   call get_parameter(paramfile, 'POLARIZATION',       par_lgt=polar)
   call get_parameter(paramfile, 'CHAIN_DIRECTORY',    par_string=chain_dir)
+  call get_parameter(paramfile, 'INPUT_DIRECTORY',    par_string=base_path)
   if (polar) then
      nmaps_sht = 3
   else
@@ -1954,7 +1955,7 @@ contains
        end if
 
        call int2string(i, i_text)
-       call get_parameter(paramfile, 'INITIAL_AMPLITUDE_MAP'//i_text, par_string=filename)
+       call get_parameter(paramfile, 'INITIAL_AMPLITUDE_MAP'//i_text, par_string=filename, path=base_path)
        inquire(file=trim(filename), exist=exist)
        if (exist) then
           call read_map(filename, fg_amp(:,:,i))
@@ -1995,7 +1996,7 @@ contains
 !!$  end subroutine read_temp_amp_init
 
 
-  subroutine output_fg_overview(parfile,chain, iter, chain_dir, s_i, par_smooth)
+  subroutine output_fg_overview(parfile, chain, iter, chain_dir, s_i, par_smooth)
     implicit none
 
     integer(i4b),                   intent(in) :: chain, iter
@@ -2027,9 +2028,9 @@ contains
     
     if (.not. (allocated(mask))) then
        allocate(mask(0:npix-1,nmaps,2))
-       call get_parameter(paramfile, 'OVERVIEW_MASK_HIGHFG', par_string=filename)
+       call get_parameter(paramfile, 'OVERVIEW_MASK_HIGHFG', par_string=filename, path=base_path)
        call read_map(filename, mask(:,:,1))
-       call get_parameter(paramfile, 'OVERVIEW_MASK_LOWFG',  par_string=filename)
+       call get_parameter(paramfile, 'OVERVIEW_MASK_LOWFG',  par_string=filename, path=base_path)
        call read_map(filename, mask(:,:,2))
        call get_parameter(paramfile, 'OVERVIEW_FREQ_MIN',    par_dp=nu_min)
        call get_parameter(paramfile, 'OVERVIEW_FREQ_MAX',    par_dp=nu_max)

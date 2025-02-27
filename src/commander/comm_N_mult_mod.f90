@@ -71,14 +71,14 @@ contains
     ! Read general parameters
     map_id = map_id_in
     call int2string(map_id, map_text)
-    call get_parameter(paramfile, 'MASKFILE',                  par_string=maskfile)
-    call get_parameter(paramfile, 'NOISE_FORMAT',              par_string=noise_format)       
+    call get_parameter(paramfile, 'MASKFILE',                  par_string=maskfile, path=base_path)
+    call get_parameter(paramfile, 'NOISE_FORMAT',              par_string=noise_format) 
     call get_parameter(paramfile, 'NSIDE',                     par_int=nside)       
     call get_parameter(paramfile, 'LMAX',                      par_int=lmax)       
     call get_parameter(paramfile, 'POLARIZATION',              par_lgt=polarization)       
     call get_parameter(paramfile, 'REGULARIZATION_NOISE',      par_dp=reg_noise)       
     call get_parameter(paramfile, 'REG_NOISE_SCALE'//map_text, par_dp=reg_scale)       
-    call get_parameter(paramfile, 'SAMPLE_INSIDE_MASK',        par_lgt=sample_inside_mask)       
+    call get_parameter(paramfile, 'SAMPLE_INSIDE_MASK',        par_lgt=sample_inside_mask)
     call get_parameter(paramfile, 'NUMBAND',                   par_int=numband)       
     reg_noise = reg_noise * reg_scale
     npix    = 12*nside**2
@@ -104,7 +104,7 @@ contains
 
     ! Read noise RMS maps -- this is always needed
     paramtext = 'NOISE_RMS' // map_text
-    call get_parameter(paramfile, trim(paramtext), par_string=noisefile)
+    call get_parameter(paramfile, trim(paramtext), par_string=noisefile, path=base_path)
     
     allocate(invN_rms(0:map_size-1,nmaps,2))
     allocate(sqrt_invN_rms(0:map_size-1,nmaps,2))
@@ -162,7 +162,7 @@ contains
        if (myid_alms == numprocs-1) col_to = numpix
 
        paramtext = 'INV_N_MAT' // map_text
-       call get_parameter(paramfile, trim(paramtext), par_string=noisefile)
+       call get_parameter(paramfile, trim(paramtext), par_string=noisefile, path=base_path)
        allocate(invN_dense(numpix, col_from:col_to))
        open(unit,file=trim(noisefile),form='unformatted')
        read(unit) n
@@ -185,7 +185,7 @@ contains
        close(unit)
 
        paramtext = 'SQRT_INV_N_MAT' // map_text
-       call get_parameter(paramfile, trim(paramtext), par_string=noisefile)
+       call get_parameter(paramfile, trim(paramtext), par_string=noisefile, path=base_path)
        allocate(sqrt_invN_dense(numpix, col_from:col_to))
        open(unit,file=trim(noisefile),form='unformatted')
        read(unit) n

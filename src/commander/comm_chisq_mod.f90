@@ -54,7 +54,7 @@ contains
     call get_parameter(paramfile, 'OPERATION',              par_string=operation)
     call get_parameter(paramfile, 'APPLY_GAIN_CORRECTIONS', par_lgt=apply_gain_corr)
     call get_parameter(paramfile, 'NUM_BP_MCMC_SUBSTEPS',   par_int=num_bp_step)
-    call get_parameter(paramfile, 'PROCESSING_MASK',        par_string=procmaskfile)
+    call get_parameter(paramfile, 'PROCESSING_MASK',        par_string=procmaskfile, path=base_path)
 
     allocate(procmask(0:map_size-1,nmaps), procmask_full(0:npix-1,nmaps))
     call read_map(procmaskfile, procmask_full)

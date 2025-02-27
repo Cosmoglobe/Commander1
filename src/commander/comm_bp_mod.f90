@@ -93,19 +93,19 @@ contains
        if (trim(bp(i)%id) == 'delta') then
           filename = ''
        else if (trim(bp(i)%id) == 'LFI') then
-          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename)
+          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename, path=base_path)
           threshold = 0.d0
        else if (trim(bp(i)%id) == 'HFI_cmb' .or. trim(bp(i)%id) == 'PSM_LFI') then
-          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename)
+          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename, path=base_path)
           threshold = 1.d-7
        else if (trim(bp(i)%id) == 'HFI_submm') then
-          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename)
+          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename, path=base_path)
           threshold = 1.d-5
        else if (trim(bp(i)%id) == 'WMAP') then
-          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename)
+          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename, path=base_path)
           threshold = 0.d0
        else if (trim(bp(i)%id) == 'DIRBE') then
-          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename)
+          call get_parameter(paramfile, 'BANDPASS'           // i_text, par_string=filename, path=base_path)
           threshold = 0.d0
        else 
           write(*,*) 'Error -- bandpass type not supported: ', trim(bp(i)%id)

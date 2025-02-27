@@ -14,7 +14,8 @@ module comm_system_mod
   integer(c_int64_t), bind(C, name="fe_nan")       :: fe_nan
   integer(c_int64_t), bind(C, name="fe_overflow")  :: fe_overflow
   integer(c_int64_t), bind(C, name="fe_underflow") :: fe_underflow
-
+  character(len=1024)                              :: base_path
+  
 contains
 
   subroutine fsleep(t)
