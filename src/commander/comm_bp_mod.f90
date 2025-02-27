@@ -54,8 +54,10 @@ contains
     call get_parameter(paramfile, 'NUMBAND',                par_int=numband)    
     call get_parameter(paramfile, 'T_CMB',                  par_dp=T_CMB)
     call get_parameter(paramfile, 'CHAIN_DIRECTORY',        par_string=chaindir)
-    call get_parameter(paramfile, 'GAIN_INIT',              par_string=gain_init_file)
-    call get_parameter(paramfile, 'BANDPASS_INIT',          par_string=bp_init_file)
+    call get_parameter(paramfile, 'GAIN_INIT',              par_string=gain_init_file, &
+         & path=base_path)
+    call get_parameter(paramfile, 'BANDPASS_INIT',          par_string=bp_init_file, &
+         & path=base_path)
     call get_parameter(paramfile, 'MJYSR_CONVENTION',       par_string=MJysr_convention)
     call get_parameter(paramfile, 'APPLY_BP_CORRECTIONS',   par_lgt=apply_bp_corr)
     call get_parameter(paramfile, 'APPLY_GAIN_CORRECTIONS', par_lgt=apply_gain_corr)
@@ -148,11 +150,13 @@ contains
           open(unit,file=trim(gain_init_file), recl=5000)
           do while (.true.)
              read(unit,'(a)',end=87) line
+             !write(*,*) 'line ', line
              if (line(1:1) == '#') cycle
              read(line,*) j, bp%gain
           end do
 87        close(unit)
        else
+          write(*,*) 'OBS gain init file not existing, using default'
           bp%gain = 1.d0
        end if
     else
@@ -170,6 +174,8 @@ contains
              read(line,*) j, bp%delta
           end do
 88        close(unit)
+       else
+          write(*,*) 'OBS bp init file not existing, using default'
        end if
     end if
     
