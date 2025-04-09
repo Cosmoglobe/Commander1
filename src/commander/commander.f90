@@ -580,8 +580,8 @@ contains
        end if
 
        ! Outside mask
-       !if (.not. enforce_zero_cl) then
-       if (.true.) then
+       if (.not. enforce_zero_cl) then
+       !if (.true.) then
           precond_type       = 2
           call update_mask_state(OUTSIDE_MASK)
           if (num_fg_comp > 0) then
